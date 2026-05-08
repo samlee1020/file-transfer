@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Local runtime data
+data/
+tmp/
+trash/
+*.db
+*.db-*
+
+# Go build and test output
+file-transfer-backend
+coverage.out
+
+# Node dependencies and logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Frontend build output
+dist/
+
+# TypeScript/Vite generated files
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Environment files
+.env
+.env.*
+!.env.example
