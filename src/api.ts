@@ -7,6 +7,7 @@ import type {
   LoginResult,
   PageResult,
   PreviewKind,
+  Scratchpad,
   TextPreview,
   UploadResult,
 } from "./types";
@@ -100,6 +101,20 @@ export async function changePassword(token: string, oldPassword: string, newPass
     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
   });
   await parseResponse<void>(res);
+}
+
+export async function getScratchpad(token: string): Promise<Scratchpad> {
+  const res = await fetch("/api/v1/admin/scratchpad", { headers: authHeaders(token) });
+  return parseResponse<Scratchpad>(res);
+}
+
+export async function saveScratchpad(token: string, content: string): Promise<Scratchpad> {
+  const res = await fetch("/api/v1/admin/scratchpad", {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return parseResponse<Scratchpad>(res);
 }
 
 export interface FileQuery {

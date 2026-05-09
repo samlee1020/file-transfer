@@ -10,6 +10,7 @@ services:
       DATA_DIR: "/data"
       MAX_UPLOAD_BYTES: "52428800"
       TEXT_PREVIEW_BYTES: "1048576"
+      SCRATCHPAD_MAX_BYTES: "1048576"
       ADMIN_SESSION_TTL_HOURS: "24"
     volumes:
       - ./data:/data

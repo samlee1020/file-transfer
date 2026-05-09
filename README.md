@@ -165,6 +165,7 @@ curl -sS http://127.0.0.1:19090/api/v1/files \
 | `DATA_DIR` | `/data` | SQLite 与上传文件根目录 |
 | `MAX_UPLOAD_BYTES` | `52428800` | 单文件上传上限 |
 | `TEXT_PREVIEW_BYTES` | `1048576` | 文本/Markdown 预览读取上限 |
+| `SCRATCHPAD_MAX_BYTES` | `1048576` | 管理员草稿本最大字节数 |
 | `ADMIN_SESSION_TTL_HOURS` | `24` | 管理员会话有效期 |
 | `PUBLIC_BASE_URL` | 空 | 可选，用于生成完整下载链接 |
 

@@ -72,6 +72,13 @@ export interface TextPreview {
   bytes_read: number;
 }
 
+export interface Scratchpad {
+  content: string;
+  updated_at: string | null;
+  size_bytes: number;
+  max_bytes: number;
+}
+
 export interface FileEvent {
   id: number;
   file_id: number | null;

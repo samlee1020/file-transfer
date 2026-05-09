@@ -398,7 +398,53 @@ HTTP/1.1 204 No Content
 
 规则：吊销当前会话令牌。重复退出或令牌已吊销时仍可返回 `204 No Content`。
 
-### 5.5 文件列表
+### 5.5 管理员草稿本
+
+草稿本是一个管理员共享的纯文本暂存区，内容保存在服务器 `DATA_DIR/scratchpad.txt`，用于多设备之间快速复制粘贴文本。
+
+读取：
+
+```http
+GET /api/v1/admin/scratchpad
+```
+
+成功响应：
+
+```json
+{
+  "request_id": "req_01HX6J9E2Y7V9K5VN5Z9ZK0Q7A",
+  "data": {
+    "content": "hello\n",
+    "updated_at": "2026-05-09T10:20:30.123Z",
+    "size_bytes": 6,
+    "max_bytes": 1048576
+  }
+}
+```
+
+保存：
+
+```http
+PUT /api/v1/admin/scratchpad
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "content": "hello\n"
+}
+```
+
+规则：
+
+1. 该接口要求管理员 Bearer Token。
+2. 默认最大长度由 `SCRATCHPAD_MAX_BYTES` 控制，默认 `1048576` 字节。
+3. 保存时写入临时文件后原子替换 `DATA_DIR/scratchpad.txt`。
+4. 多设备同时保存时，最后一次保存覆盖此前内容。
+
+### 5.6 文件列表
 
 ```http
 GET /api/v1/admin/files
@@ -450,7 +496,7 @@ GET /api/v1/admin/files
 }
 ```
 
-### 5.6 文件详情
+### 5.7 文件详情
 
 ```http
 GET /api/v1/admin/files/{file_id}
@@ -493,7 +539,7 @@ GET /api/v1/admin/files/{file_id}
 | 401 | `UNAUTHORIZED` | 管理员认证失败。 |
 | 404 | `NOT_FOUND` | 文件记录不存在。 |
 
-### 5.7 管理员下载文件
+### 5.8 管理员下载文件
 
 ```http
 GET /api/v1/admin/files/{file_id}/download
@@ -506,7 +552,7 @@ HEAD /api/v1/admin/files/{file_id}/download
 2. 该接口便于管理端从列表直接下载，必须认证。
 3. 文件已删除时返回 `404 NOT_FOUND`。
 
-### 5.8 预览文件
+### 5.9 预览文件
 
 ```http
 GET /api/v1/admin/files/{file_id}/preview
@@ -556,7 +602,7 @@ Accept-Ranges: bytes
 | 404 | `NOT_FOUND` | 文件不存在或已删除。 |
 | 422 | `UNSUPPORTED_PREVIEW` | 文件类型不支持预览，或文本无法解码。 |
 
-### 5.9 删除单个文件
+### 5.10 删除单个文件
 
 ```http
 DELETE /api/v1/admin/files/{file_id}
@@ -578,7 +624,7 @@ HTTP/1.1 204 No Content
 6. 文件删除后，其 6 位文件码可被后续上传重新使用。
 7. 删除成功后记录一条 `delete` 事件。
 
-### 5.10 批量删除文件
+### 5.11 批量删除文件
 
 ```http
 POST /api/v1/admin/files/batch-delete
@@ -644,7 +690,7 @@ Content-Type: application/json
 1. 只要请求格式合法，批量接口整体返回 `200 OK`，单个文件结果放入 `items`。
 2. 如果 `file_ids` 为空、数量超过限制或包含非法 ID，返回 `400 INVALID_ARGUMENT`。
 
-### 5.11 事件明细列表
+### 5.12 事件明细列表
 
 ```http
 GET /api/v1/admin/events
@@ -697,7 +743,7 @@ GET /api/v1/admin/events
 }
 ```
 
-### 5.12 删除单条事件记录
+### 5.13 删除单条事件记录
 
 ```http
 DELETE /api/v1/admin/events/{event_id}
@@ -716,7 +762,7 @@ HTTP/1.1 204 No Content
 3. 重复删除同一条事件记录返回 `204 No Content`。
 4. 事件记录不存在时返回 `404 NOT_FOUND`。
 
-### 5.13 批量删除事件记录
+### 5.14 批量删除事件记录
 
 ```http
 POST /api/v1/admin/events/batch-delete
@@ -778,6 +824,8 @@ Content-Type: application/json
 | `GET` | `/api/v1/admin/me` | 是 | 获取当前管理员。 |
 | `PATCH` | `/api/v1/admin/password` | 是 | 修改管理员密码。 |
 | `POST` | `/api/v1/admin/logout` | 是 | 管理员退出登录。 |
+| `GET` | `/api/v1/admin/scratchpad` | 是 | 读取管理员草稿本。 |
+| `PUT` | `/api/v1/admin/scratchpad` | 是 | 保存管理员草稿本。 |
 | `GET` | `/api/v1/admin/files` | 是 | 管理员文件列表。 |
 | `GET` | `/api/v1/admin/files/{file_id}` | 是 | 管理员文件详情。 |
 | `GET` | `/api/v1/admin/files/{file_id}/download` | 是 | 管理员下载。 |

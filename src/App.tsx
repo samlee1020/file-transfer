@@ -29,17 +29,19 @@ import {
   deleteFile,
   getAuthorizedBlob,
   getMe,
+  getScratchpad,
   getTextPreview,
   healthCheck,
   listEvents,
   listFiles,
   login,
   logout,
+  saveScratchpad,
   uploadFile,
   type EventQuery,
   type FileQuery,
 } from "./api";
-import type { Admin, FileEvent, FileItem, PageResult, TextPreview, UploadResult } from "./types";
+import type { Admin, FileEvent, FileItem, PageResult, Scratchpad, TextPreview, UploadResult } from "./types";
 import { classNames, downloadUrl, formatBytes, formatDate, normalizeCode, statusText } from "./utils";
 
 const tokenKey = "file-transfer-admin-token";
@@ -107,7 +109,7 @@ export function App(): JSX.Element {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-copper">File Transfer</p>
-              <h1 className="text-xl font-semibold tracking-normal sm:text-2xl">轻量文件传输台</h1>
+              <h1 className="text-xl font-semibold tracking-normal sm:text-2xl">Sam Lee开发的轻量文件传输台</h1>
             </div>
           </div>
 
@@ -514,6 +516,8 @@ function AdminWorkspace({
       ) : (
         <SecurityPanel token={token} notify={notify} admin={admin} />
       )}
+
+      <ScratchpadPanel token={token} notify={notify} onUnauthorized={onUnauthorized} />
     </section>
   );
 }
@@ -999,6 +1003,143 @@ function SecurityPanel({
           <span>用户名：{admin?.username ?? "-"}</span>
           <span className="sm:col-span-2">上次改密：{formatDate(admin?.password_changed_at)}</span>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function ScratchpadPanel({
+  token,
+  notify,
+  onUnauthorized,
+}: {
+  token: string;
+  notify: (kind: ToastKind, message: string) => void;
+  onUnauthorized: () => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState("");
+  const [server, setServer] = useState<Scratchpad | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [remoteChanged, setRemoteChanged] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const serverUpdatedAt = server?.updated_at ?? null;
+
+  const load = async (mode: "initial" | "manual" | "poll" = "manual") => {
+    if (mode !== "poll") setLoading(true);
+    try {
+      const next = await getScratchpad(token);
+      if (dirty && next.updated_at !== serverUpdatedAt) setRemoteChanged(true);
+      setServer(next);
+      if (!dirty) {
+        setDraft(next.content);
+        setRemoteChanged(false);
+      }
+      if (mode === "manual") notify("success", "草稿本已刷新");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) onUnauthorized();
+      else if (mode !== "poll") notify("error", readableError(error, "读取草稿本失败"));
+    } finally {
+      if (mode !== "poll") setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load("initial");
+  }, [token]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => void load("poll"), 3000);
+    return () => window.clearInterval(id);
+  }, [token, dirty, serverUpdatedAt]);
+
+  const size = new Blob([draft]).size;
+  const max = server?.max_bytes ?? 1048576;
+  const tooLarge = size > max;
+
+  return (
+    <section className="glass rounded-[28px] p-5 sm:p-6">
+      <div className="flex flex-col gap-4 border-b hairline pb-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-medium text-muted">Shared Scratchpad</p>
+          <h2 className="mt-1 text-2xl font-semibold">管理员草稿本</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">内容实时保存在服务器 `data/scratchpad.txt`，适合在多台设备之间快速复制粘贴文本。</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={classNames(
+              "inline-flex h-10 items-center rounded-full border px-3 text-sm font-medium",
+              remoteChanged ? "border-copper/20 bg-copper/10 text-copper" : dirty ? "border-ink/10 bg-white/62 text-muted" : "border-moss/20 bg-moss/10 text-moss",
+            )}
+          >
+            {remoteChanged ? "服务器有新内容" : dirty ? "有未保存修改" : "已同步"}
+          </span>
+          <button
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-full border hairline bg-white/65 px-4 text-sm font-semibold text-ink transition hover:bg-white disabled:opacity-50"
+            disabled={loading}
+            onClick={() => void load("manual")}
+          >
+            <RefreshCw className={loading ? "animate-spin" : ""} size={16} />
+            刷新
+          </button>
+          <button
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-full bg-ink px-4 text-sm font-semibold text-paper shadow-control transition hover:bg-black disabled:opacity-50"
+            disabled={saving || !dirty || tooLarge}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                const saved = await saveScratchpad(token, draft);
+                setServer(saved);
+                setDraft(saved.content);
+                setDirty(false);
+                setRemoteChanged(false);
+                notify("success", "草稿本已保存");
+              } catch (error) {
+                if (error instanceof ApiError && error.status === 401) onUnauthorized();
+                else notify("error", readableError(error, "保存草稿本失败"));
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            {saving ? <RefreshCw className="animate-spin" size={16} /> : <Check size={16} />}
+            保存
+          </button>
+        </div>
+      </div>
+
+      {remoteChanged ? (
+        <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-copper/20 bg-copper/10 px-4 py-3 text-sm text-copper sm:flex-row sm:items-center sm:justify-between">
+          <span>其他设备已经保存了新内容。你可以继续保存覆盖，或加载服务器版本。</span>
+          <button
+            className="focus-ring h-9 rounded-full bg-white/75 px-3 font-semibold text-copper"
+            onClick={() => {
+              setDraft(server?.content ?? "");
+              setDirty(false);
+              setRemoteChanged(false);
+            }}
+          >
+            加载服务器版本
+          </button>
+        </div>
+      ) : null}
+
+      <textarea
+        className="focus-ring mt-4 min-h-[260px] w-full resize-y rounded-[22px] border hairline bg-white/68 p-4 font-mono text-sm leading-6 text-ink placeholder:font-sans placeholder:text-muted"
+        value={draft}
+        placeholder="把需要在多台设备之间传递的文本粘贴到这里..."
+        spellCheck={false}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setDirty(true);
+        }}
+      />
+
+      <div className="mt-3 flex flex-col gap-2 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
+        <span className={tooLarge ? "font-medium text-copper" : ""}>
+          {formatBytes(size)} / {formatBytes(max)}
+        </span>
+        <span>服务器更新时间：{formatDate(server?.updated_at)}</span>
       </div>
     </section>
   );

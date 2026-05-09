@@ -27,9 +27,11 @@ import (
 const (
 	defaultMaxUploadBytes   = int64(50 << 20)
 	defaultTextPreviewBytes = int64(1 << 20)
+	defaultScratchpadBytes  = int64(1 << 20)
 	defaultSessionTTLHours  = 24
 	codeAlphabet            = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	initialAdminPassword    = "password123"
+	scratchpadFileName      = "scratchpad.txt"
 )
 
 type Config struct {
@@ -37,6 +39,7 @@ type Config struct {
 	DataDir              string
 	MaxUploadBytes       int64
 	TextPreviewBytes     int64
+	ScratchpadMaxBytes   int64
 	AdminSessionTTL      time.Duration
 	PublicBaseURL        string
 	InitialAdminPassword string
@@ -111,6 +114,7 @@ func loadConfig() Config {
 		DataDir:              envString("DATA_DIR", "/data"),
 		MaxUploadBytes:       envInt64("MAX_UPLOAD_BYTES", defaultMaxUploadBytes),
 		TextPreviewBytes:     envInt64("TEXT_PREVIEW_BYTES", defaultTextPreviewBytes),
+		ScratchpadMaxBytes:   envInt64("SCRATCHPAD_MAX_BYTES", defaultScratchpadBytes),
 		AdminSessionTTL:      time.Duration(envInt64("ADMIN_SESSION_TTL_HOURS", defaultSessionTTLHours)) * time.Hour,
 		PublicBaseURL:        strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		InitialAdminPassword: envString("INITIAL_ADMIN_PASSWORD", initialAdminPassword),
@@ -142,6 +146,9 @@ func NewApp(cfg Config) (*App, error) {
 	}
 	if cfg.TextPreviewBytes <= 0 {
 		cfg.TextPreviewBytes = defaultTextPreviewBytes
+	}
+	if cfg.ScratchpadMaxBytes <= 0 {
+		cfg.ScratchpadMaxBytes = defaultScratchpadBytes
 	}
 	if cfg.AdminSessionTTL <= 0 {
 		cfg.AdminSessionTTL = defaultSessionTTLHours * time.Hour
@@ -414,6 +421,10 @@ func (a *App) handleAdmin(w http.ResponseWriter, r *http.Request, path string) {
 	case path == "/api/v1/admin/logout" && r.Method == http.MethodPost:
 		_, _ = a.db.Exec(`UPDATE admin_sessions SET revoked_at=?, updated_at=? WHERE id=?`, nowString(), nowString(), admin.SessionID)
 		w.WriteHeader(http.StatusNoContent)
+	case path == "/api/v1/admin/scratchpad" && r.Method == http.MethodGet:
+		a.handleGetScratchpad(w, r)
+	case path == "/api/v1/admin/scratchpad" && r.Method == http.MethodPut:
+		a.handlePutScratchpad(w, r)
 	case path == "/api/v1/admin/files" && r.Method == http.MethodGet:
 		a.handleListFiles(w, r)
 	case path == "/api/v1/admin/files/batch-delete" && r.Method == http.MethodPost:
@@ -904,6 +915,123 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request, admin admin
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handleGetScratchpad(w http.ResponseWriter, r *http.Request) {
+	content, updatedAt, err := a.readScratchpad()
+	if err != nil {
+		if errors.Is(err, errScratchpadTooLarge) {
+			writeError(w, r, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "scratchpad exceeds max size", nil)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "INTERNAL", "cannot read scratchpad", nil)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"content":    content,
+		"updated_at": nullableString(updatedAt),
+		"size_bytes": len([]byte(content)),
+		"max_bytes":  a.cfg.ScratchpadMaxBytes,
+	})
+}
+
+func (a *App) handlePutScratchpad(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		writeError(w, r, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "application/json is required", nil)
+		return
+	}
+	var req struct {
+		Content string `json:"content"`
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, a.cfg.ScratchpadMaxBytes+4096))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid json body", nil)
+		return
+	}
+	if int64(len([]byte(req.Content))) > a.cfg.ScratchpadMaxBytes {
+		writeError(w, r, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "scratchpad exceeds max size", nil)
+		return
+	}
+	updatedAt, err := a.writeScratchpad(req.Content)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "INTERNAL", "cannot save scratchpad", nil)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"content":    req.Content,
+		"updated_at": updatedAt,
+		"size_bytes": len([]byte(req.Content)),
+		"max_bytes":  a.cfg.ScratchpadMaxBytes,
+	})
+}
+
+var errScratchpadTooLarge = errors.New("scratchpad too large")
+
+func (a *App) scratchpadPath() string {
+	return filepath.Join(a.cfg.DataDir, scratchpadFileName)
+}
+
+func (a *App) readScratchpad() (string, sql.NullString, error) {
+	path := a.scratchpadPath()
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", sql.NullString{}, nil
+	}
+	if err != nil {
+		return "", sql.NullString{}, err
+	}
+	if info.Size() > a.cfg.ScratchpadMaxBytes {
+		return "", sql.NullString{}, errScratchpadTooLarge
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", sql.NullString{}, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, a.cfg.ScratchpadMaxBytes+1))
+	if err != nil {
+		return "", sql.NullString{}, err
+	}
+	if int64(len(data)) > a.cfg.ScratchpadMaxBytes {
+		return "", sql.NullString{}, errScratchpadTooLarge
+	}
+	return string(data), sql.NullString{String: timeString(info.ModTime().UTC()), Valid: true}, nil
+}
+
+func (a *App) writeScratchpad(content string) (string, error) {
+	tmp, err := os.CreateTemp(filepath.Join(a.cfg.DataDir, "tmp"), "scratchpad-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	finalPath := a.scratchpadPath()
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return "", err
+	}
+	cleanup = false
+	info, err := os.Stat(finalPath)
+	if err != nil {
+		return nowString(), nil
+	}
+	return timeString(info.ModTime().UTC()), nil
 }
 
 func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {

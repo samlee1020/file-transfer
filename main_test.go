@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -177,6 +178,61 @@ func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
 		t.Fatalf("current session status=%d", meCurrent.Code)
 	}
 	_ = login(t, app, "new-password-456")
+}
+
+func TestAdminScratchpad(t *testing.T) {
+	app := newTestApp(t)
+	token := login(t, app, initialAdminPassword)
+
+	unauth := doReq(app, httptest.NewRequest(http.MethodGet, "/api/v1/admin/scratchpad", nil))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized scratchpad status=%d", unauth.Code)
+	}
+
+	empty := doReq(app, authReq(http.MethodGet, "/api/v1/admin/scratchpad", token, nil))
+	if empty.Code != http.StatusOK {
+		t.Fatalf("empty scratchpad status=%d body=%s", empty.Code, empty.Body.String())
+	}
+	emptyData := decodeResp(t, empty.Body)["data"].(map[string]any)
+	if emptyData["content"] != "" || emptyData["updated_at"] != nil {
+		t.Fatalf("bad empty scratchpad: %#v", emptyData)
+	}
+
+	save := doReq(app, authReq(http.MethodPut, "/api/v1/admin/scratchpad", token, strings.NewReader(`{"content":"hello\nfrom scratchpad"}`)))
+	if save.Code != http.StatusOK {
+		t.Fatalf("save scratchpad status=%d body=%s", save.Code, save.Body.String())
+	}
+	saved := decodeResp(t, save.Body)["data"].(map[string]any)
+	if saved["content"] != "hello\nfrom scratchpad" || saved["updated_at"] == nil {
+		t.Fatalf("bad saved scratchpad: %#v", saved)
+	}
+
+	gotBytes, err := os.ReadFile(filepath.Join(app.cfg.DataDir, scratchpadFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotBytes) != "hello\nfrom scratchpad" {
+		t.Fatalf("scratchpad file content=%q", string(gotBytes))
+	}
+
+	reload := doReq(app, authReq(http.MethodGet, "/api/v1/admin/scratchpad", token, nil))
+	if reload.Code != http.StatusOK {
+		t.Fatalf("reload scratchpad status=%d body=%s", reload.Code, reload.Body.String())
+	}
+	reloadData := decodeResp(t, reload.Body)["data"].(map[string]any)
+	if reloadData["content"] != "hello\nfrom scratchpad" {
+		t.Fatalf("bad reloaded scratchpad: %#v", reloadData)
+	}
+}
+
+func TestScratchpadTooLarge(t *testing.T) {
+	app := newTestApp(t)
+	app.cfg.ScratchpadMaxBytes = 4
+	token := login(t, app, initialAdminPassword)
+	rr := doReq(app, authReq(http.MethodPut, "/api/v1/admin/scratchpad", token, strings.NewReader(`{"content":"12345"}`)))
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("too large scratchpad status=%d body=%s", rr.Code, rr.Body.String())
+	}
 }
 
 func TestUploadTooLarge(t *testing.T) {
