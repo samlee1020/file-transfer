@@ -426,7 +426,7 @@ function LoginPanel({
           <Shield size={23} />
         </div>
         <h2 className="mt-8 text-3xl font-semibold">管理员登录</h2>
-        <p className="mt-3 text-sm leading-6 text-muted">登录后可查看文件列表、预览文本/PDF、管理事件记录，并执行删除操作。</p>
+        <p className="mt-3 text-sm leading-6 text-muted">登录后可查看文件列表、预览文本、图片、视频和 PDF，管理事件记录，并执行删除操作。</p>
         <form className="mt-8 grid gap-3" onSubmit={onSubmit}>
           <label className="grid gap-2 text-sm font-medium">
             密码
@@ -581,7 +581,7 @@ function FilesPanel({
 
   const handlePreview = async (file: FileItem) => {
     try {
-      if (file.preview_kind === "pdf") {
+      if (file.preview_kind === "pdf" || file.preview_kind === "image" || file.preview_kind === "video") {
         const { blob } = await getAuthorizedBlob(token, `/api/v1/admin/files/${file.id}/preview`);
         setPreview({ file, blobUrl: URL.createObjectURL(blob) });
         return;
@@ -652,6 +652,8 @@ function FilesPanel({
               <option value="text">文本</option>
               <option value="markdown">Markdown</option>
               <option value="pdf">PDF</option>
+              <option value="image">图片</option>
+              <option value="video">视频</option>
               <option value="none">不可预览</option>
             </Select>
             <Select value={query.sort} onChange={(value) => setQuery((old) => ({ ...old, page: 1, sort: value as FileQuery["sort"] }))}>
@@ -1112,7 +1114,13 @@ function PreviewModal({ state, onClose }: { state: PreviewState; onClose: () => 
           </button>
         </div>
         <div className="min-h-[55vh] overflow-auto bg-white/58 p-5">
-          {state.blobUrl ? (
+          {state.blobUrl && state.file.preview_kind === "image" ? (
+            <div className="grid min-h-[55vh] place-items-center rounded-2xl bg-ink/5 p-3">
+              <img className="max-h-[68vh] max-w-full rounded-xl object-contain" alt={state.file.original_name} src={state.blobUrl} />
+            </div>
+          ) : state.blobUrl && state.file.preview_kind === "video" ? (
+            <video className="max-h-[68vh] w-full rounded-2xl bg-black" src={state.blobUrl} controls preload="metadata" />
+          ) : state.blobUrl ? (
             <iframe className="h-[65vh] w-full rounded-2xl border hairline bg-white" title={state.file.original_name} src={state.blobUrl} />
           ) : state.text?.kind === "markdown" ? (
             <div className="markdown-body max-w-none text-sm leading-7">

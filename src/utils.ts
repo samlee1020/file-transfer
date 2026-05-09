@@ -47,6 +47,8 @@ export function statusText(status: string): string {
     text: "文本",
     markdown: "Markdown",
     pdf: "PDF",
+    image: "图片",
+    video: "视频",
   };
   return map[status] ?? status;
 }

@@ -10,7 +10,7 @@
 2. 管理员通过用户名和密码登录，管理员接口全部放在 `/admin` 命名空间下，并要求会话 Bearer Token。
 3. 文件码是便捷下载标识，固定为 6 位字母数字；输入可大小写，服务端统一转大写；下载失败时不泄露文件曾经存在、已删除或无权限等细节。
 4. 文件上传和下载使用流式处理，避免将完整文件读入内存。
-5. JSON 接口使用统一响应结构；文件下载和 PDF 预览直接返回二进制流。
+5. JSON 接口使用统一响应结构；文件下载和 PDF、图片、视频预览直接返回二进制流。
 6. 系统记录简单的上传、下载、删除事件明细，管理员可以查看并删除事件记录。
 
 ## 2. 通用约定
@@ -412,7 +412,7 @@ GET /api/v1/admin/files
 | `page_size` | `20` | 每页数量，范围 1 到 100。 |
 | `status` | `available` | `available`、`deleted`、`all`。 |
 | `q` | 空 | 文件名或文件码模糊查询。 |
-| `preview_kind` | 空 | `none`、`text`、`markdown`、`pdf`。 |
+| `preview_kind` | 空 | `none`、`text`、`markdown`、`pdf`、`image`、`video`。 |
 | `mime_type` | 空 | MIME 类型精确过滤。 |
 | `uploaded_from` | 空 | 上传起始时间，UTC RFC3339。 |
 | `uploaded_to` | 空 | 上传结束时间，UTC RFC3339。 |
@@ -519,6 +519,8 @@ GET /api/v1/admin/files/{file_id}/preview
 | `text` | `application/json` | 返回文本内容。 |
 | `markdown` | `application/json` | 返回 Markdown 原文，由前端决定如何渲染。 |
 | `pdf` | `application/pdf` | 返回 inline PDF 流。 |
+| `image` | `image/*` | 返回 inline 图片流。 |
+| `video` | `video/*` | 返回 inline 视频流，支持 Range 请求。 |
 | `none` | 错误 | 返回 `422 UNSUPPORTED_PREVIEW`。 |
 
 文本和 Markdown 成功响应：
@@ -536,7 +538,7 @@ GET /api/v1/admin/files/{file_id}/preview
 }
 ```
 
-PDF 成功响应：
+PDF、图片、视频成功响应：
 
 ```http
 HTTP/1.1 200 OK

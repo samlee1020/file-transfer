@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +47,10 @@ func decodeResp(t *testing.T, body io.Reader) map[string]any {
 }
 
 func uploadReq(t *testing.T, path, filename, content string) *http.Request {
+	return uploadBytesReq(t, path, filename, []byte(content))
+}
+
+func uploadBytesReq(t *testing.T, path, filename string, content []byte) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -52,7 +58,7 @@ func uploadReq(t *testing.T, path, filename, content string) *http.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte(content)); err != nil {
+	if _, err := part.Write(content); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {
@@ -179,6 +185,113 @@ func TestUploadTooLarge(t *testing.T) {
 	rr := doReq(app, uploadReq(t, "/api/v1/files", "tiny.txt", "12345"))
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("too large status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestImageAndVideoPreview(t *testing.T) {
+	app := newTestApp(t)
+	token := login(t, app, initialAdminPassword)
+
+	png := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00,
+	}
+	imageUpload := doReq(app, uploadBytesReq(t, "/api/v1/files", "pixel.png", png))
+	if imageUpload.Code != http.StatusCreated {
+		t.Fatalf("image upload status=%d body=%s", imageUpload.Code, imageUpload.Body.String())
+	}
+	imageData := decodeResp(t, imageUpload.Body)["data"].(map[string]any)
+	if imageData["preview_kind"] != "image" || imageData["mime_type"] != "image/png" {
+		t.Fatalf("bad image upload data: %#v", imageData)
+	}
+
+	videoUpload := doReq(app, uploadBytesReq(t, "/api/v1/files", "clip.mp4", []byte("not a real video, extension decides preview in mvp")))
+	if videoUpload.Code != http.StatusCreated {
+		t.Fatalf("video upload status=%d body=%s", videoUpload.Code, videoUpload.Body.String())
+	}
+	videoData := decodeResp(t, videoUpload.Body)["data"].(map[string]any)
+	if videoData["preview_kind"] != "video" || videoData["mime_type"] != "video/mp4" {
+		t.Fatalf("bad video upload data: %#v", videoData)
+	}
+
+	list := doReq(app, authReq(http.MethodGet, "/api/v1/admin/files?preview_kind=image", token, nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("image list status=%d body=%s", list.Code, list.Body.String())
+	}
+	filesData := decodeResp(t, list.Body)["data"].(map[string]any)
+	items := filesData["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 image item, got %#v", filesData)
+	}
+	imageID := int64(items[0].(map[string]any)["id"].(float64))
+	imagePreview := doReq(app, authReq(http.MethodGet, "/api/v1/admin/files/"+strconvID(imageID)+"/preview", token, nil))
+	if imagePreview.Code != http.StatusOK || imagePreview.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("image preview status=%d content-type=%q", imagePreview.Code, imagePreview.Header().Get("Content-Type"))
+	}
+
+	listVideo := doReq(app, authReq(http.MethodGet, "/api/v1/admin/files?preview_kind=video", token, nil))
+	if listVideo.Code != http.StatusOK {
+		t.Fatalf("video list status=%d body=%s", listVideo.Code, listVideo.Body.String())
+	}
+	videoItems := decodeResp(t, listVideo.Body)["data"].(map[string]any)["items"].([]any)
+	if len(videoItems) != 1 {
+		t.Fatalf("expected 1 video item, got %#v", videoItems)
+	}
+	videoID := int64(videoItems[0].(map[string]any)["id"].(float64))
+	videoPreview := doReq(app, authReq(http.MethodGet, "/api/v1/admin/files/"+strconvID(videoID)+"/preview", token, nil))
+	if videoPreview.Code != http.StatusOK || videoPreview.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatalf("video preview status=%d content-type=%q", videoPreview.Code, videoPreview.Header().Get("Content-Type"))
+	}
+}
+
+func TestMigratesOldPreviewKindConstraint(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE files (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT NOT NULL CHECK (length(code) = 6 AND code GLOB '[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]'),
+		original_name TEXT NOT NULL CHECK (length(original_name) BETWEEN 1 AND 255),
+		stored_name TEXT NOT NULL UNIQUE CHECK (length(stored_name) BETWEEN 1 AND 255),
+		storage_path TEXT NOT NULL UNIQUE CHECK (length(storage_path) BETWEEN 1 AND 512),
+		size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+		mime_type TEXT NOT NULL DEFAULT 'application/octet-stream' CHECK (length(mime_type) BETWEEN 1 AND 127),
+		extension TEXT NOT NULL DEFAULT '' CHECK (length(extension) <= 32),
+		sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+		preview_kind TEXT NOT NULL DEFAULT 'none' CHECK (preview_kind IN ('none', 'text', 'markdown', 'pdf')),
+		status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'deleted')),
+		uploaded_by_role TEXT NOT NULL DEFAULT 'anonymous' CHECK (uploaded_by_role IN ('anonymous', 'admin')),
+		uploaded_at TEXT NOT NULL,
+		download_count INTEGER NOT NULL DEFAULT 0 CHECK (download_count >= 0),
+		last_downloaded_at TEXT,
+		deleted_at TEXT,
+		deleted_by_role TEXT CHECK (deleted_by_role IS NULL OR deleted_by_role = 'admin'),
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		CHECK ((status = 'available' AND deleted_at IS NULL AND deleted_by_role IS NULL) OR (status = 'deleted' AND deleted_at IS NOT NULL))
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := NewApp(Config{DataDir: dir, InitialAdminPassword: initialAdminPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.db.Close()
+	now := nowString()
+	_, err = app.db.Exec(`INSERT INTO files(code, original_name, stored_name, storage_path, size_bytes, mime_type, extension, sha256, preview_kind, status, uploaded_by_role, uploaded_at, created_at, updated_at)
+		VALUES('IMG001', 'pixel.png', 'pixel.png', 'uploads/pixel.png', 1, 'image/png', 'png', ?, 'image', 'available', 'anonymous', ?, ?, ?)`,
+		strings.Repeat("a", 64), now, now, now)
+	if err != nil {
+		t.Fatalf("image preview_kind should be accepted after migration: %v", err)
 	}
 }
 

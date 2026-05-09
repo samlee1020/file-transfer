@@ -1,4 +1,4 @@
-export type PreviewKind = "none" | "text" | "markdown" | "pdf";
+export type PreviewKind = "none" | "text" | "markdown" | "pdf" | "image" | "video";
 export type FileStatus = "available" | "deleted";
 export type EventType = "upload" | "download" | "delete";
 export type ActorRole = "anonymous" | "admin" | "system";

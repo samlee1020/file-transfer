@@ -193,7 +193,7 @@ func (a *App) migrate() error {
 			mime_type TEXT NOT NULL DEFAULT 'application/octet-stream' CHECK (length(mime_type) BETWEEN 1 AND 127),
 			extension TEXT NOT NULL DEFAULT '' CHECK (length(extension) <= 32),
 			sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
-			preview_kind TEXT NOT NULL DEFAULT 'none' CHECK (preview_kind IN ('none', 'text', 'markdown', 'pdf')),
+			preview_kind TEXT NOT NULL DEFAULT 'none' CHECK (preview_kind IN ('none', 'text', 'markdown', 'pdf', 'image', 'video')),
 			status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'deleted')),
 			uploaded_by_role TEXT NOT NULL DEFAULT 'anonymous' CHECK (uploaded_by_role IN ('anonymous', 'admin')),
 			uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -264,6 +264,79 @@ func (a *App) migrate() error {
 			return fmt.Errorf("migrate: %w: %s", err, stmt)
 		}
 	}
+	if err := a.migratePreviewKinds(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *App) migratePreviewKinds() error {
+	var tableSQL string
+	if err := a.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='files'`).Scan(&tableSQL); err != nil {
+		return err
+	}
+	if strings.Contains(tableSQL, "'image'") && strings.Contains(tableSQL, "'video'") {
+		_, _ = a.db.Exec(`INSERT OR IGNORE INTO schema_migrations(version, name) VALUES (2, 'image_video_preview')`)
+		return nil
+	}
+	if _, err := a.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer func() { _, _ = a.db.Exec(`PRAGMA foreign_keys = ON`) }()
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmts := []string{
+		`DROP INDEX IF EXISTS idx_files_status_uploaded_at`,
+		`DROP INDEX IF EXISTS idx_files_available_code`,
+		`DROP INDEX IF EXISTS idx_files_code`,
+		`DROP INDEX IF EXISTS idx_files_original_name`,
+		`DROP INDEX IF EXISTS idx_files_preview_kind`,
+		`DROP INDEX IF EXISTS idx_files_sha256`,
+		`CREATE TABLE files_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			code TEXT NOT NULL CHECK (length(code) = 6 AND code GLOB '[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]'),
+			original_name TEXT NOT NULL CHECK (length(original_name) BETWEEN 1 AND 255),
+			stored_name TEXT NOT NULL UNIQUE CHECK (length(stored_name) BETWEEN 1 AND 255),
+			storage_path TEXT NOT NULL UNIQUE CHECK (length(storage_path) BETWEEN 1 AND 512),
+			size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+			mime_type TEXT NOT NULL DEFAULT 'application/octet-stream' CHECK (length(mime_type) BETWEEN 1 AND 127),
+			extension TEXT NOT NULL DEFAULT '' CHECK (length(extension) <= 32),
+			sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+			preview_kind TEXT NOT NULL DEFAULT 'none' CHECK (preview_kind IN ('none', 'text', 'markdown', 'pdf', 'image', 'video')),
+			status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'deleted')),
+			uploaded_by_role TEXT NOT NULL DEFAULT 'anonymous' CHECK (uploaded_by_role IN ('anonymous', 'admin')),
+			uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			download_count INTEGER NOT NULL DEFAULT 0 CHECK (download_count >= 0),
+			last_downloaded_at TEXT,
+			deleted_at TEXT,
+			deleted_by_role TEXT CHECK (deleted_by_role IS NULL OR deleted_by_role = 'admin'),
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			CHECK ((status = 'available' AND deleted_at IS NULL AND deleted_by_role IS NULL) OR (status = 'deleted' AND deleted_at IS NOT NULL))
+		)`,
+		`INSERT INTO files_new(id, code, original_name, stored_name, storage_path, size_bytes, mime_type, extension, sha256, preview_kind, status, uploaded_by_role, uploaded_at, download_count, last_downloaded_at, deleted_at, deleted_by_role, created_at, updated_at)
+		 SELECT id, code, original_name, stored_name, storage_path, size_bytes, mime_type, extension, sha256, preview_kind, status, uploaded_by_role, uploaded_at, download_count, last_downloaded_at, deleted_at, deleted_by_role, created_at, updated_at FROM files`,
+		`DROP TABLE files`,
+		`ALTER TABLE files_new RENAME TO files`,
+		`CREATE INDEX idx_files_status_uploaded_at ON files (status, uploaded_at DESC, id DESC)`,
+		`CREATE UNIQUE INDEX idx_files_available_code ON files (code) WHERE status = 'available'`,
+		`CREATE INDEX idx_files_code ON files (code)`,
+		`CREATE INDEX idx_files_original_name ON files (original_name)`,
+		`CREATE INDEX idx_files_preview_kind ON files (preview_kind)`,
+		`CREATE INDEX idx_files_sha256 ON files (sha256)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate preview kinds: %w: %s", err, stmt)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, _ = a.db.Exec(`INSERT OR IGNORE INTO schema_migrations(version, name) VALUES (2, 'image_video_preview')`)
 	return nil
 }
 
@@ -551,6 +624,26 @@ func detectMime(ext string, first []byte) string {
 		return "text/markdown"
 	case "pdf":
 		return "application/pdf"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	case "bmp":
+		return "image/bmp"
+	case "avif":
+		return "image/avif"
+	case "mp4", "m4v":
+		return "video/mp4"
+	case "webm":
+		return "video/webm"
+	case "ogv", "ogg":
+		return "video/ogg"
+	case "mov":
+		return "video/quicktime"
 	}
 	if len(first) == 0 {
 		return "application/octet-stream"
@@ -567,9 +660,29 @@ func previewKind(ext, mt string) string {
 		return "markdown"
 	case ext == "pdf" || mt == "application/pdf":
 		return "pdf"
+	case isImagePreview(ext, mt):
+		return "image"
+	case isVideoPreview(ext, mt):
+		return "video"
 	default:
 		return "none"
 	}
+}
+
+func isImagePreview(ext, mt string) bool {
+	switch ext {
+	case "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif":
+		return true
+	}
+	return strings.HasPrefix(mt, "image/") && mt != "image/svg+xml"
+}
+
+func isVideoPreview(ext, mt string) bool {
+	switch ext {
+	case "mp4", "m4v", "webm", "ogv", "ogg", "mov":
+		return true
+	}
+	return strings.HasPrefix(mt, "video/")
 }
 
 func (a *App) commitUpload(r *http.Request, tmpPath string, meta uploadMeta, role string, adminID sql.NullInt64) (fileRecord, error) {
@@ -816,7 +929,7 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "%"+s+"%", "%"+normalizeCode(s)+"%")
 	}
 	if pk := q.Get("preview_kind"); pk != "" {
-		if !in(pk, "none", "text", "markdown", "pdf") {
+		if !in(pk, "none", "text", "markdown", "pdf", "image", "video") {
 			writeError(w, r, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid preview_kind", nil)
 			return
 		}
@@ -894,20 +1007,24 @@ func (a *App) handlePreview(w http.ResponseWriter, r *http.Request, id int64) {
 		writeJSON(w, r, http.StatusOK, map[string]any{
 			"kind": rec.PreviewKind, "encoding": "utf-8", "content": content, "truncated": truncated, "bytes_read": len(data),
 		})
-	case "pdf":
-		f, err := os.Open(path)
-		if err != nil {
-			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "file not found", nil)
-			return
-		}
-		defer f.Close()
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", contentDisposition("inline", rec.OriginalName))
-		w.Header().Set("Accept-Ranges", "bytes")
-		http.ServeContent(w, r, rec.OriginalName, time.Now(), f)
+	case "pdf", "image", "video":
+		a.serveInlinePreview(w, r, rec, path)
 	default:
 		writeError(w, r, http.StatusUnprocessableEntity, "UNSUPPORTED_PREVIEW", "file preview is not supported", nil)
 	}
+}
+
+func (a *App) serveInlinePreview(w http.ResponseWriter, r *http.Request, rec fileRecord, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "file not found", nil)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", rec.MimeType)
+	w.Header().Set("Content-Disposition", contentDisposition("inline", rec.OriginalName))
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, rec.OriginalName, time.Now(), f)
 }
 
 func (a *App) handleBatchDeleteFiles(w http.ResponseWriter, r *http.Request, admin adminContext) {
