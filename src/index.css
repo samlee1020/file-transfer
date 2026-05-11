@@ -91,8 +91,23 @@ button:disabled {
 .markdown-body p,
 .markdown-body ul,
 .markdown-body ol,
-.markdown-body pre {
+.markdown-body pre,
+.markdown-body blockquote,
+.markdown-body table {
   margin: 0.7em 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+}
+
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body ol {
+  list-style: decimal;
 }
 
 .markdown-body code,
@@ -100,9 +115,52 @@ button:disabled {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.markdown-body :not(pre) > code {
+  border-radius: 6px;
+  background: rgba(30, 32, 28, 0.08);
+  padding: 0.12rem 0.32rem;
+  font-size: 0.92em;
+}
+
 .markdown-body pre {
   overflow: auto;
   border-radius: 8px;
   padding: 1rem;
-  background: rgba(30, 32, 28, 0.06);
+  background: #f6f8fa;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid rgba(183, 106, 60, 0.45);
+  padding-left: 1rem;
+  color: #62645d;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(30, 32, 28, 0.12);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: rgba(30, 32, 28, 0.05);
+  font-weight: 700;
+}
+
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.4rem 0;
 }

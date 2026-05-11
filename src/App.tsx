@@ -18,8 +18,34 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import css from "highlight.js/lib/languages/css";
+import diff from "highlight.js/lib/languages/diff";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import go from "highlight.js/lib/languages/go";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import markdown from "highlight.js/lib/languages/markdown";
+import php from "highlight.js/lib/languages/php";
+import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+import { FormEvent, type ComponentProps, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkMath from "remark-math";
 import {
   ApiError,
   batchDeleteEvents,
@@ -45,6 +71,68 @@ import type { Admin, FileEvent, FileItem, PageResult, Scratchpad, TextPreview, U
 import { classNames, downloadUrl, formatBytes, formatDate, normalizeCode, statusText } from "./utils";
 
 const tokenKey = "file-transfer-admin-token";
+
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("shell", bash);
+hljs.registerLanguage("sh", bash);
+hljs.registerLanguage("c", c);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("c++", cpp);
+hljs.registerLanguage("cc", cpp);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("diff", diff);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("docker", dockerfile);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("ini", ini);
+hljs.registerLanguage("toml", ini);
+hljs.registerLanguage("java", java);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("js", javascript);
+hljs.registerLanguage("jsx", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("kotlin", kotlin);
+hljs.registerLanguage("kt", kotlin);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("md", markdown);
+hljs.registerLanguage("php", php);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("py", python);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("rb", ruby);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("rs", rust);
+hljs.registerLanguage("sql", sql);
+hljs.registerLanguage("swift", swift);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("ts", typescript);
+hljs.registerLanguage("tsx", typescript);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("html", xml);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("yml", yaml);
+
+const markdownComponents: Components = {
+  code({ className, children, ...props }: ComponentProps<"code">) {
+    const match = /language-([a-zA-Z0-9_-]+)/.exec(className ?? "");
+    const language = match?.[1]?.toLowerCase();
+    const code = String(children).replace(/\n$/, "");
+    if (!language || !hljs.getLanguage(language)) {
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className={classNames("hljs", className)}
+        dangerouslySetInnerHTML={{ __html: hljs.highlight(code, { language, ignoreIllegals: true }).value }}
+        {...props}
+      />
+    );
+  },
+};
 
 type Mode = "public" | "admin";
 type AdminView = "files" | "events" | "security";
@@ -1056,6 +1144,61 @@ function ScratchpadPanel({
   const size = new Blob([draft]).size;
   const max = server?.max_bytes ?? 1048576;
   const tooLarge = size > max;
+  const renderedDraft = draft.trim().length > 0 ? draft : "_草稿本还是空的。_";
+
+  const handleEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const input = event.currentTarget;
+    const value = input.value;
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const tab = "\t";
+
+    if (start === end) {
+      const next = value.slice(0, start) + tab + value.slice(end);
+      setDraft(next);
+      setDirty(true);
+      window.requestAnimationFrame(() => input.setSelectionRange(start + tab.length, start + tab.length));
+      return;
+    }
+
+    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+    const lineEnd = value.indexOf("\n", end);
+    const blockEnd = lineEnd === -1 ? value.length : lineEnd;
+    const before = value.slice(0, lineStart);
+    const block = value.slice(lineStart, blockEnd);
+    const after = value.slice(blockEnd);
+    const lines = block.split("\n");
+
+    if (event.shiftKey) {
+      let removed = 0;
+      const nextBlock = lines
+        .map((line) => {
+          if (line.startsWith(tab)) {
+            removed += 1;
+            return line.slice(1);
+          }
+          if (line.startsWith("  ")) {
+            removed += 2;
+            return line.slice(2);
+          }
+          return line;
+        })
+        .join("\n");
+      const next = before + nextBlock + after;
+      setDraft(next);
+      setDirty(true);
+      window.requestAnimationFrame(() => input.setSelectionRange(Math.max(lineStart, start - 1), Math.max(lineStart, end - removed)));
+      return;
+    }
+
+    const nextBlock = lines.map((line) => tab + line).join("\n");
+    const next = before + nextBlock + after;
+    setDraft(next);
+    setDirty(true);
+    window.requestAnimationFrame(() => input.setSelectionRange(start + tab.length, end + lines.length * tab.length));
+  };
 
   return (
     <section className="glass rounded-[28px] p-5 sm:p-6">
@@ -1063,7 +1206,7 @@ function ScratchpadPanel({
         <div>
           <p className="text-sm font-medium text-muted">Shared Scratchpad</p>
           <h2 className="mt-1 text-2xl font-semibold">管理员草稿本</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">内容实时保存在服务器 `data/scratchpad.txt`，适合在多台设备之间快速复制粘贴文本。</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">左侧编辑 Markdown，右侧实时预览；内容保存在服务器 `data/scratchpad.txt`。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span
@@ -1124,16 +1267,37 @@ function ScratchpadPanel({
         </div>
       ) : null}
 
-      <textarea
-        className="focus-ring mt-4 min-h-[260px] w-full resize-y rounded-[22px] border hairline bg-white/68 p-4 font-mono text-sm leading-6 text-ink placeholder:font-sans placeholder:text-muted"
-        value={draft}
-        placeholder="把需要在多台设备之间传递的文本粘贴到这里..."
-        spellCheck={false}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          setDirty(true);
-        }}
-      />
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center justify-between px-1 text-sm">
+            <span className="font-semibold text-ink">编辑</span>
+            <span className="text-muted">Markdown / LaTeX / Code</span>
+          </div>
+          <textarea
+            className="focus-ring min-h-[420px] w-full resize-y rounded-[22px] border hairline bg-white/68 p-4 font-mono text-sm leading-6 text-ink placeholder:font-sans placeholder:text-muted"
+            value={draft}
+            placeholder={"在这里输入 Markdown...\n\n例如：\n\n## 今日临时记录\n\n行内公式 $E = mc^2$\n\n```go\nfmt.Println(\"hello\")\n```\n\n$$\n\\int_0^1 x^2 dx = \\frac{1}{3}\n$$"}
+            spellCheck={false}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setDirty(true);
+            }}
+            onKeyDown={handleEditorKeyDown}
+          />
+        </div>
+
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center justify-between px-1 text-sm">
+            <span className="font-semibold text-ink">预览</span>
+            <span className="text-muted">实时渲染</span>
+          </div>
+          <div className="markdown-body min-h-[420px] overflow-auto rounded-[22px] border hairline bg-white/72 p-5 text-sm leading-7 text-ink">
+            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} components={markdownComponents}>
+              {renderedDraft}
+            </ReactMarkdown>
+          </div>
+        </div>
+      </div>
 
       <div className="mt-3 flex flex-col gap-2 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
         <span className={tooLarge ? "font-medium text-copper" : ""}>
